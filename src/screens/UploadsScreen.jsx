@@ -50,7 +50,6 @@ const handleUpload = async () => {
     const uniquePath = `uploads/${session.user.id}/${Date.now()}.${fileExt}`;
     const shortCode = generateCode();
 
-    // Read file as base64 and convert to ArrayBuffer
     const fileInfo = await FileSystem.getInfoAsync(file.uri);
     if (!fileInfo.exists) throw new Error('File not found');
 
@@ -58,7 +57,6 @@ const handleUpload = async () => {
       encoding: 'base64'
     });
 
-    // Convert base64 to byte array
     const byteCharacters = atob(base64);
     const byteNumbers = new Array(byteCharacters.length);
     for (let i = 0; i < byteCharacters.length; i++) {

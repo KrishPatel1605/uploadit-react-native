@@ -29,7 +29,6 @@ export default function DownloadsScreen() {
     if (!code) return;
     setLoading(true);
     try {
-      // Fetch file metadata from database
       const { data, error } = await supabase
         .from('files')
         .select('*')
@@ -45,7 +44,6 @@ export default function DownloadsScreen() {
 
       console.log('File data:', data);
 
-      // Create signed URL for download
       const { data: signedData, error: signError } = await supabase.storage
         .from('uploadit')
         .createSignedUrl(data.file_path, 300);
@@ -57,7 +55,6 @@ export default function DownloadsScreen() {
 
       console.log('Signed URL:', signedData.signedUrl);
 
-      // Download file to local storage
       const fileUri = FileSystem.documentDirectory + data.original_name;
       const downloadRes = await FileSystem.downloadAsync(
         signedData.signedUrl,
@@ -66,7 +63,6 @@ export default function DownloadsScreen() {
 
       console.log('Download result:', downloadRes);
 
-      // Save to local downloads list
       const newFile = {
         id: Date.now().toString(),
         name: data.original_name,
