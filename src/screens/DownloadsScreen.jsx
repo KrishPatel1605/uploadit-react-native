@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, Alert, ActivityIndicator, SafeAreaView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+// import * as FileSystem from 'expo-file-system';
 import { shareAsync } from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
@@ -28,34 +29,67 @@ export default function DownloadsScreen() {
     if (!code) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase.from('files').select('*').eq('download_code', code).single();
-      if (error || !data) throw new Error('File not found or invalid code.');
+      // Fetch file metadata from database
+      const { data, error } = await supabase
+        .from('files')
+        .select('*')
+        .eq('download_code', code.trim().toUpperCase())
+        .single();
 
-      const { data: signedData, error: signError } = await supabase.storage.from('uploads').createSignedUrl(data.file_path, 300);
-      if (signError) throw signError;
+      if (error) {
+        console.log('DB Error:', error);
+        throw new Error('File not found or invalid code.');
+      }
 
+      if (!data) throw new Error('File not found or invalid code.');
+
+      console.log('File data:', data);
+
+      // Create signed URL for download
+      const { data: signedData, error: signError } = await supabase.storage
+        .from('uploadit')
+        .createSignedUrl(data.file_path, 300);
+
+      if (signError) {
+        console.log('Signed URL Error:', signError);
+        throw signError;
+      }
+
+      console.log('Signed URL:', signedData.signedUrl);
+
+      // Download file to local storage
       const fileUri = FileSystem.documentDirectory + data.original_name;
-      const downloadRes = await FileSystem.downloadAsync(signedData.signedUrl, fileUri);
+      const downloadRes = await FileSystem.downloadAsync(
+        signedData.signedUrl,
+        fileUri
+      );
 
+      console.log('Download result:', downloadRes);
+
+      // Save to local downloads list
       const newFile = {
         id: Date.now().toString(),
         name: data.original_name,
         uri: downloadRes.uri,
         date: new Date().toLocaleDateString()
       };
-      
+
       const existing = await AsyncStorage.getItem('downloads');
       const downloads = existing ? JSON.parse(existing) : [];
       downloads.unshift(newFile);
       await AsyncStorage.setItem('downloads', JSON.stringify(downloads));
+
+      setLocalFiles(downloads);
 
       Alert.alert('Success', 'File downloaded successfully!', [
         { text: 'Open', onPress: () => shareAsync(downloadRes.uri) },
         { text: 'OK' }
       ]);
       setManualCode('');
+      loadLocalFiles();
 
     } catch (e) {
+      console.log('Download error:', e);
       Alert.alert('Download Error', e.message);
     } finally {
       setLoading(false);
@@ -80,9 +114,9 @@ export default function DownloadsScreen() {
       if (!permission.granted) {
         return (
           <View style={styles.centerContent}>
-            <Text style={{marginBottom: 20}}>We need your permission to show the camera</Text>
+            <Text style={{ marginBottom: 20 }}>We need your permission to show the camera</Text>
             <TouchableOpacity style={styles.buttonPrimary} onPress={requestPermission}>
-                <Text style={styles.buttonText}>Grant Permission</Text>
+              <Text style={styles.buttonText}>Grant Permission</Text>
             </TouchableOpacity>
           </View>
         );
@@ -113,18 +147,18 @@ export default function DownloadsScreen() {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.centerContent}>
           <Text style={styles.headerTitle}>Enter Download Code</Text>
           <TextInput
-            style={[styles.input, {textAlign: 'center', fontSize: 24, letterSpacing: 4, width: '80%'}]}
+            style={[styles.input, { textAlign: 'center', fontSize: 24, letterSpacing: 4, width: '80%' }]}
             placeholder="XXXXXX"
             value={manualCode}
             onChangeText={(t) => setManualCode(t.toUpperCase())}
             maxLength={8}
           />
-          <TouchableOpacity 
-            style={[styles.buttonPrimary, {width: '80%', marginTop: 20}]} 
+          <TouchableOpacity
+            style={[styles.buttonPrimary, { width: '80%', marginTop: 20 }]}
             onPress={() => handleDownload(manualCode)}
             disabled={loading}
           >
-            {loading ? <ActivityIndicator color="#fff"/> : <Text style={styles.buttonText}>Download</Text>}
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Download</Text>}
           </TouchableOpacity>
         </KeyboardAvoidingView>
       );
@@ -139,16 +173,31 @@ export default function DownloadsScreen() {
           renderItem={({ item }) => (
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                 <Ionicons name="document" size={24} color="#007AFF" />
-                 <Text style={styles.fileName}>{item.name}</Text>
+                <Ionicons name="document" size={24} color="#007AFF" />
+                <Text style={styles.fileName}>{item.name}</Text>
               </View>
-              <Text style={{color: '#888', marginBottom: 10}}>Downloaded: {item.date}</Text>
+              <Text style={{ color: '#888', marginBottom: 10 }}>Downloaded: {item.date}</Text>
               <View style={styles.cardActions}>
-                <TouchableOpacity style={styles.actionBtn} onPress={() => shareAsync(item.uri)}>
-                   <Text style={styles.actionText}>Open / Share</Text>
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => shareAsync(item.uri, { UTI: item.uri, mimeType: '*/*' })}
+                >
+                  <Ionicons name="open-outline" size={18} color="#007AFF" />
+                  <Text style={styles.actionText}>Open</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.actionBtn} onPress={() => deleteLocalFile(item.id, item.uri)}>
-                   <Text style={[styles.actionText, {color: 'red'}]}>Delete</Text>
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => shareAsync(item.uri, { dialogTitle: 'Share file' })}
+                >
+                  <Ionicons name="share-outline" size={18} color="#007AFF" />
+                  <Text style={styles.actionText}>Share</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => deleteLocalFile(item.id, item.uri)}
+                >
+                  <Ionicons name="trash-outline" size={18} color="red" />
+                  <Text style={[styles.actionText, { color: 'red' }]}>Delete</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -162,17 +211,17 @@ export default function DownloadsScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.tabBar}>
         {['scan', 'manual', 'list'].map(tab => (
-           <TouchableOpacity 
+          <TouchableOpacity
             key={tab}
-            style={[styles.tabItem, downloadTab === tab && styles.tabItemActive]} 
+            style={[styles.tabItem, downloadTab === tab && styles.tabItemActive]}
             onPress={() => setDownloadTab(tab)}>
             <Text style={[styles.tabText, downloadTab === tab && styles.tabTextActive]}>
-                {tab === 'scan' ? 'Scan QR' : tab === 'manual' ? 'Enter Code' : 'My Files'}
+              {tab === 'scan' ? 'Scan QR' : tab === 'manual' ? 'Enter Code' : 'My Files'}
             </Text>
           </TouchableOpacity>
         ))}
       </View>
-      <View style={{flex: 1, backgroundColor: '#f4f4f4'}}>{renderContent()}</View>
+      <View style={{ flex: 1, backgroundColor: '#f4f4f4' }}>{renderContent()}</View>
     </SafeAreaView>
   );
 }
@@ -192,7 +241,7 @@ const styles = StyleSheet.create({
   cameraContainer: { flex: 1 },
   scanOverlay: { position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center' },
   scanText: { color: 'white', fontSize: 16, backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 8, overflow: 'hidden' },
-  card: { backgroundColor: '#fff', borderRadius: 12, padding: 15, margin: 15, marginBottom: 0, shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
+  card: { backgroundColor: '#fff', borderRadius: 12, padding: 15, margin: 15, marginBottom: 0, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   fileName: { fontSize: 16, fontWeight: '600', marginLeft: 10, flex: 1 },
   cardActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 15, borderTopWidth: 1, borderColor: '#eee', paddingTop: 10 },

@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, FlatList, TouchableOpacity, Alert, Modal, SafeAreaView, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+// import * as FileSystem from 'expo-file-system';
 import * as Clipboard from 'expo-clipboard';
 import QRCode from 'react-native-qrcode-svg';
 import { supabase } from '../lib/supabase';
@@ -35,50 +36,68 @@ export default function UploadsScreen() {
     setRefreshing(false);
   };
 
-  const handleUpload = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
-      if (result.canceled) return;
-      
-      const file = result.assets[0];
-      const fileExt = file.name.split('.').pop();
-      const uniquePath = `${session.user.id}/${Date.now()}.${fileExt}`;
-      const shortCode = generateCode();
+const handleUpload = async () => {
+  try {
+    const result = await DocumentPicker.getDocumentAsync({ 
+      copyToCacheDirectory: true,
+      type: '*/*'
+    });
+    
+    if (result.canceled) return;
 
-      const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: FileSystem.EncodingType.Base64 });
+    const file = result.assets[0];
+    const fileExt = file.name.split('.').pop();
+    const uniquePath = `uploads/${session.user.id}/${Date.now()}.${fileExt}`;
+    const shortCode = generateCode();
 
-      const { error: uploadError } = await supabase.storage
-        .from('uploads')
-        .upload(uniquePath, decodeURIComponent(escape(window.atob(base64))), {
-            contentType: file.mimeType 
-        });
+    // Read file as base64 and convert to ArrayBuffer
+    const fileInfo = await FileSystem.getInfoAsync(file.uri);
+    if (!fileInfo.exists) throw new Error('File not found');
 
-      if (uploadError) throw uploadError;
+    const base64 = await FileSystem.readAsStringAsync(file.uri, {
+      encoding: 'base64'
+    });
 
-      const { error: dbError } = await supabase.from('files').insert({
-        uploader_email: session.user.email,
-        file_path: uniquePath,
-        original_name: file.name,
-        download_code: shortCode,
+    // Convert base64 to byte array
+    const byteCharacters = atob(base64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+
+    const { error: uploadError } = await supabase.storage
+      .from('uploadit')
+      .upload(uniquePath, byteArray, {
+        contentType: file.mimeType || 'application/octet-stream',
+        upsert: false
       });
 
-      if (dbError) throw dbError;
+    if (uploadError) throw uploadError;
 
-      Alert.alert('Success', `File uploaded! Code: ${shortCode}`);
-      fetchFiles(session.user.email);
+    const { error: dbError } = await supabase.from('files').insert({
+      uploader_email: session.user.email,
+      file_path: uniquePath,
+      original_name: file.name,
+      download_code: shortCode,
+    });
 
-    } catch (e) {
-      console.log(e);
-      Alert.alert('Upload Failed', e.message || 'Unknown error');
-    }
-  };
+    if (dbError) throw dbError;
+
+    Alert.alert('Success', `File uploaded! Code: ${shortCode}`);
+    fetchFiles(session.user.email);
+  } catch (e) {
+    console.log('Upload error:', e);
+    Alert.alert('Upload Failed', e.message || 'Unknown error');
+  }
+};
 
   const handleDelete = async (id, path) => {
     Alert.alert("Delete File", "Are you sure?", [
       { text: "Cancel", style: "cancel" },
       { text: "Delete", style: "destructive", onPress: async () => {
           await supabase.from('files').delete().eq('id', id);
-          await supabase.storage.from('uploads').remove([path]);
+          await supabase.storage.from('uploadit').remove([path]);
           fetchFiles(session.user.email);
       }}
     ]);
